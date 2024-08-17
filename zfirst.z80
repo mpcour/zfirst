@@ -1,0 +1,1207 @@
+.Z80
+ 
+;  17/08/2024  12:30  ZFISRT.Z80  CP/M 
+;
+;  fonctionne si assemblé avec makezf (utilitaire cpmp.exe)
+;  pas avec mzf.sub  sur RunCPM  6.3
+;
+
+	                      ;  #include <stdio.h>
+	                      ;  #include <stdlib.h>
+	                      ;  #include <string.h>
+
+CW_PUSHINT	EQU 0         ;  #define CW_PUSHINT 0
+CW_COMPILE	EQU 1         ;  #define CW_COMPILE 1
+CW_RUN	EQU 2                 ;  #define CW_RUN 2
+
+CW_DEFINE	EQU 3         ;  #define CW_DEFINE 3 // :
+CW_IMMED	EQU 4         ;  #define CW_IMMED 4 // immediate
+CW_READ	EQU 5                 ;  #define CW__READ 5 // _read
+CW_FETCH	EQU 6         ;  #define CW_FETCH 6 // @
+CW_STORE	EQU 7         ;  #define CW_STORE 7 // !
+CW_SUB	EQU 8                 ;  #define CW_SUB 8 // -
+CW_MUL	EQU 9                 ;  #define CW_MUL 9 // *
+CW_DIV	EQU 10                ;  #define CW_DIV 10 // /
+CW_LT0	EQU 11                ;  #define CW_LT0 11 // <0
+CW_EXIT	EQU 12                ;  #define CW_EXIT 12 // exit
+CW_ECHO	EQU 13                ;  #define CW_ECHO 13 // echo
+CW_KEY	EQU 14                ;  #define CW_KEY 14 // key
+CW_PICK	EQU 15                ;  #define CW_PICK 15 // _pick
+CW_BYE	EQU 16                ;  #define CW_BYE 16 // bye
+CW_IEQU EQU 17
+
+	                      ;  // if we encounter a 2 and we call r with it, it will lookup the codeword
+	                      ;  // stored at m[2] which is 0, which means pushint
+ADDR_OF_PUSHINT	EQU 2         ;  #define ADDR_OF_PUSHINT 2
+
+	                      ;  // m[0]: dictionary pointer
+	                      ;  // m[1]: return stack index
+;	jp main
+;       jp testflast
+
+	ORG 0100h
+
+	jp main
+
+prompt:  db  "Hello !",0dh,">",00
+cls:     db  1bh,5bh,32h,4ah,00   ; ESC [ 2J
+rHL:     db  "Reg HL : ",00
+spsep2:  db  "  ",00
+crs:     db  0dh,00
+
+testflast:
+
+;         ld  hl,cls
+;         call pstr
+         ld   hl,prompt
+;         call pstr
+         ld   hl,rHL
+
+         HALT
+
+CONIN:                        ; cp/M BDOS
+WAITINA:
+        exx
+        ld    c,1
+        call  0005
+        exx
+	RET                   ;  Char ready in A
+
+CONOUT:
+        push  af
+        exx
+        ld    c,2
+        ld    e,a
+        call  0005
+        exx
+        pop   af
+	RET   
+
+
+inchar:
+	push hl
+	push bc
+	ld hl,isfile
+	ld a,1
+	cp (hl)
+	jp nz,pichar
+
+	ld bc,(filptr)
+	ld hl,thirdstr
+	add hl,bc
+	ld a,(hl)
+	inc bc
+	ld (filptr),bc
+	jr inl
+
+pichar:
+	call CONIN
+inl:
+	cp 00h
+	jp z,pichar
+	cp 0ffh
+	jp z,nofile
+	pop bc
+	pop hl
+	ret
+
+nofile:
+	xor a
+	ld (isfile),a
+	pop bc
+	pop hl
+iuser:
+        ld   a,1
+        ld   (isecho),a
+;        ld   a,20h            ; !!!!!!!!!!!!  mauvaise tentative (supprime tokens)
+;        ld   (tokch),a
+	ret
+
+mdump:
+;    ld hl,9D95h    ; address of where to read from
+    ld bc,16       ; number of bytes to dump
+dumploop:
+    ld a,(hl)       ; read a byte of mem at (hl)
+    call DispLeft   ; Display the left nibble
+    ld a,(hl)       ; read the byte again
+    call DispRight  ; display the left nibble
+    ld  a,32
+    out (80h),a     ;  outchar
+    cpi             ; This is a cheap way to dec bc, inc hl
+    jp pe,dumploop  ; If cpi does not set BC=0, loop again
+    ret             ;
+DispLeft:
+    rrca
+    rrca
+    rrca
+    rrca
+DispRight:
+    or  0f0h
+    daa
+    add a,0A0h
+    adc a,40h
+    out (80h),a     ;  outchar
+    ret
+
+DispNibble:
+	xor	a
+	ld      a,(hl)
+	rld
+	call	Nibble
+
+Nibble:
+	push	af
+	daa
+	add	a,0F0h
+	adc	a,40h
+
+	out (80h),a           ;  outchar
+
+	pop	af
+	rld
+	ret
+
+;Display a 16- or 8-bit number in hex.
+DispHLhex:
+; Input: HL
+   ld  c,h
+   call  OutHex8
+   ld  c,l
+OutHex8:
+; Input: C
+   ld  a,c
+   rra
+   rra
+   rra
+   rra
+   call  Conv
+   ld  a,c
+Conv:
+   and  0Fh
+   add  a,90h
+   daa
+   adc  a,40h
+   daa
+   call CONOUT
+   ret
+
+pstr:
+	ld a,(hl)
+	                      ;  out (81h),a
+	call CONOUT
+	inc hl
+	or a
+	jp nz,pstr
+	ret
+
+strcopy:	              ;  hl to de
+	xor a
+docopystr:
+	cp (hl)
+	ldi
+	jr nz,docopystr
+	ret
+
+
+locEcho:
+
+;        ret
+
+        push af
+        push  hl
+        ld  hl,isecho
+        xor a
+        cp  (HL)
+        pop hl
+        pop af
+        ret nz
+	out (80h),a           ;  outchar
+	ret
+
+
+	                      ;  Par défaut, la fonction scanf lira les caractères
+	                      ;  jusqu'au prochain séparateur
+	                      ;  (blanc, tabulation ou retour à la ligne).
+
+gettok:
+	                      ;  read_count = scanf("%s", str_mem);;
+	ld bc,0
+	ld (read_count),bc
+
+glop:
+	ld bc,(read_count)
+	ld hl,str_mem
+	add hl,bc
+
+	call inchar
+	call locEcho
+
+	cp 20h
+	jr nz,silg
+        ld  a,(tokch)
+
+silg:
+	cp 13
+	ret z
+	cp 0ffh
+	jp z,iuser
+
+	ld (hl),a
+	inc hl
+	inc hl
+	ld bc,str_mem
+	sbc hl,bc
+	ex de,hl
+	ld (read_count),de
+	cp 0
+	jp nz,glop
+
+	ret
+
+
+inpline:
+
+	                      ;  hl = input ptr (str_mem + xxxx)
+
+	push hl
+	pop de
+ilop:
+	call inchar
+	call locEcho
+
+        cp 20h
+	jr nz,silent
+        ld  a,(tokch)
+
+silent:
+	cp 13
+	ret z
+	cp 0ffh
+	jp z,iuser
+
+	ld (hl),a
+	inc hl
+	cp 0
+	jp nz,ilop
+	                      ;  inc hl ; !!!!!!!!!!!!!!!!!
+	push de
+	pop bc
+	sbc hl,bc             ;  hl = last word length
+	push hl
+	pop bc
+	                      ;  inc bc ; return len+1
+	ret
+
+CmpStrings:
+cpstr:
+	                      ;  Compare two strings at HL and DE, with lowercase being equal to uppercase
+	                      ;  returns z if they are equal
+	                      ;  returns c if HL points to the smaller string
+	                      ;  returns nc if HL is the bigger (or equal) string.
+	                      ;  destroys A,C,DE,HL
+	                      ;  preserves B
+	                      ;  26 bytes
+
+	ld a,(de)
+	call toUpper
+	ld c,a
+	ld a,(hl)
+	call toUpper
+	cp c
+	inc de
+	inc hl
+	ret nz
+	or a
+	jr nz,cpstr
+	ret
+
+toUpper:
+	                      ;  A is the char.
+	                      ;  If A is a lowercase letter, this sets it to the matching uppercase
+	                      ;  18cc or 30cc or 41cc
+	                      ;  avg: 26.75cc
+	cp 'a'
+	ret c
+	cp 'z'+1
+	ret nc
+	sub 'a'-'A'
+	ret
+
+atoi:
+	exx
+	xor a
+	ld h,a
+	ld l,a
+	ld d,a
+	ld e,a                ;  on initialise le résultat DE:HL à zéro dans les registres secondaires grâce à l'instruction EXX qui les permute
+	exx
+	ld a,(hl)
+	inc hl
+	sub 48                ;  code ASCII du 0
+	jr c,atoiexit         ;  si on est plus petit ce n'est pas un nombre on quitte
+	cp 10
+	jr nc,atoiexit        ;  si on est plus grand que 9 alors on quitte aussi
+	exx
+	ld l,a                ;  on initialise la première unité
+	exx
+	                      ;  itérations suivantes
+atoiloop:
+	ld a,(hl)
+	inc hl
+	sub 48
+	jr c,atoiexit
+	cp 10
+	jr nc,atoiexit
+	exx
+	                      ;  multiplication par 10 du nombre 32 bits DE:HL
+	add hl,hl
+	rl e
+	rl d                  ;  d'abord on le multiplie par deux
+	push de
+	push hl               ;  et on le sauvegarde
+	add hl,hl
+	rl e
+	rl d                  ;  on re-multiplie par deux (x4)
+	add hl,hl
+	rl e
+	rl d                  ;  on remultiplie par deux (x8)
+	pop bc
+	add hl,bc
+	ex de,hl
+	pop bc
+	adc hl,bc             ;  on a additionné notre valeur de départ x2 et notre valeur de départ x8 -> multiplication par 10
+	ex de,hl
+	ld b,0
+	ld c,a
+	add hl,bc             ;  on peut ajouter la nouvelle unité au nombre
+	exx
+	jr atoiloop
+atoiexit:
+	exx                   ;  quand on sort on active le jeu de registres secondaires car c'est là qu'est stocké notre nombre DE:HL
+	ret
+
+app_to_dict:	              ;  int val BC (dict_ptr for example)
+	ld DE,(mhere)         ;  de = addr m[0]
+	ld IX,mhere
+	add IX,DE
+	add IX,DE             ;  IX = *m[m[0]] (ptr x 2 to offset)
+	ld (IX+1),B
+	ld (IX+0),C           ;  m[m[0]] = val
+	inc DE                ;  addr += 1
+	ld (mhere),DE
+	ret
+
+def_word:	              ;  (int codeword BC) m[xx]= last_cfa m[xx+1]=nfa m[xx+2]=cw
+	push BC
+	ld bc,(last_dict_entry )
+	call app_to_dict
+	LD de,(mhere)         ;
+	dec DE                ;  DE = m[0] - 1 (previous entry)
+	ld (last_dict_entry),de
+	ld bc,(last_str_entry)   ;  init 40h (64)
+	call app_to_dict      ;  append_to_dict
+	pop BC                ;  BC = codeword
+	call app_to_dict
+
+	ld bc,(last_str_entry)
+	ld hl,str_mem
+	add hl,bc             ;  hl=str_mem+last_str_entry
+
+	call inpline          ;  returns BC = length +1
+	ld de,(last_str_entry)
+
+	ex de,hl
+	add hl,bc
+	ex de,hl
+	ld (last_str_entry),de   ;  last_str_entry += length+1
+
+	ret
+
+rcases:
+	dw caseCW_PUSHINT     ;  0
+	dw caseCW_COMPILE     ;  1
+	dw caseCW_RUN         ;  2
+	                      ;  : imm word @ ! - * / <0 exit echo key _pick bye
+	dw caseCW_DEFINE      ;  3
+	dw caseCW_IMMED       ;  4
+	dw caseCW_READ        ;  5
+	dw caseCW_FETCH       ;  6
+	dw caseCW_STORE       ;  7
+	dw caseCW_SUB         ;  8
+	dw caseCW_MUL         ;  9
+	dw caseCW_DIV         ;  10
+	dw caseCW_LT0         ;  11
+	dw caseCW_EXIT        ;  12
+	dw caseCW_ECHO        ;  13
+	dw caseCW_KEY         ;  14
+	dw caseCW_PICK        ;  15
+	dw caseCW_BYE         ;  16
+	dw caseCW_IEQU         ;  17
+
+run:
+	                      ;  void r(int word_addr)
+	                      ;  {
+	inc bc
+	                      ;  ld bc,(word_addr) ; next_word = word_addr + 1;
+	ld (next_word),bc
+	dec bc
+	ld hl,mhere           ;  codeword = m[word_addr];
+	add hl,bc
+	add hl,bc
+	ld c,(hl)
+	inc hl
+	ld b,(hl)
+	ld (codeword),bc
+
+	                      ;  switch (codeword) {
+
+	ld HL,codeword
+	ld a,(HL)             ;  HL = *codeword
+	ld b,0
+	ld c,a
+	sub 32
+	                      ;  jp p,hlimit
+	ret p                 ;  !!!!!!!!!!!!!! ????
+	ld HL,rcases
+	add HL,BC
+	add HL,BC
+	ld E,(HL)
+	inc HL
+	ld D,(HL)
+	ex DE,HL
+	push hl
+	ld de,mkr
+	sbc hl,de
+	pop hl
+	jp p,hlimit
+	jp (hl)               ;  HL @caseCW_xxxxx
+
+
+hlimit:
+	halt
+
+getstack:	              ;  return BC=stack[stack_ptr]
+	push hl
+	ld bc,(stack_ptr)
+	ld hl,stack
+	add hl,bc
+	add hl,bc
+	ld c,(hl)
+	inc hl
+	ld b,(hl)
+	pop hl
+	ret
+decstptr:
+	ld bc,(stack_ptr)
+	dec bc
+	dec bc
+	ld (stack_ptr),bc
+	ret
+incstptr:
+	ld bc,(stack_ptr)
+	inc bc
+	inc bc
+	ld (stack_ptr),bc
+	ld hl,stack+256       ;  limit
+	sbc hl,bc
+	ret p
+	HALT                  ;  stack overflow !!
+	ret
+
+
+caseCW_PUSHINT:	              ;  // pushint
+	call incstptr
+	ld bc,(stack_ptr)     ;  stack[stack_ptr] = top_of_stack;
+	ld hl,stack
+	add hl,bc
+	add hl,bc
+	ld bc,(top_of_stack)
+	ld (hl),c             ;  stack[stack_ptr] = top_of_stack
+	inc hl
+	ld (hl),b
+	ld bc,(program_counter)
+	ld hl,mhere
+	add hl,bc             ;  hl=*m[program_counter]
+	add hl,bc
+	ld c,(hl)
+	inc hl
+	ld b,(hl)             ;  bc= m[program_counter]
+	ld (top_of_stack),bc
+	ld bc,(program_counter)
+	inc bc
+	ld (program_counter),bc   ;  program_counter += 1;
+	ret
+
+caseCW_COMPILE:	              ;  // compile code
+	                      ;  // a pointer to the next word is appended to the dictionary
+	ld bc,(next_word)
+	call app_to_dict
+	ret
+
+caseCW_RUN:	              ;  // run code
+	                      ;  // push program counter into return stack
+	ld bc,(mhere+2)       ;  m[1] += 1;
+	inc bc
+	ld (mhere+2),bc
+	ld hl,mhere           ;  m[m[1]] = program_counter;
+	add hl,bc
+	add hl,bc
+	ld bc,(program_counter)
+	ld (hl),c
+	inc hl
+	ld (hl),b
+	ld bc,(next_word)
+	ld (program_counter),bc   ;  // jump to the address of the next word
+	ret
+
+caseCW_DEFINE:
+	                      ;  // :
+	ld bc,CW_COMPILE      ;  def_word(CW_COMPILE,0);
+	call def_word
+trun:
+	ld bc,CW_RUN
+	call app_to_dict
+	ret
+
+caseCW_IMMED:	              ;  // immediate
+	ld bc,(mhere)         ;  m[0] -= 2;
+	dec bc
+	dec bc
+	ld (mhere),bc
+	jr trun
+
+noread:
+	ret
+
+caseCW_READ:	              ;  // _read
+	                      ;  // first 64 bytes of str_mem are used to read user input, if
+	                      ;  // word is larger than that it will overwrite word names
+	                      ;  if (filinp) read_count = fscanf(finp,"%s", str_mem);
+	                      ;  else read_count = scanf("%s", str_mem);
+
+	call gettok           ;
+
+	                      ;  if (filinp && feof(finp)) { read_count = 0; isfile=0; }
+
+	                      ;  if (read_count < 1) {
+	                      ;  filinp=0; // break; // exit(0);
+	                      ;  } else {
+	                      ;  entry_addr = last_dict_entry;
+	                      ;  }
+	ld hl,read_count
+	ld a,1
+	sub (hl)
+	jp p,noread           ;  exit reading
+
+	ld de,(last_dict_entry)
+	ld (entry_addr),de
+
+	                      ;  // entry_addr will start from the end of the dictionary,
+	                      ;  // pointing to the beginning of the entry, it will get the value
+	                      ;  // of m[entry_addr + 1] (entry_addr + 1 points to the address of
+	                      ;  // the word name in str_mem)
+	                      ;  // then we will use that address to get the address of the name on
+	                      ;  // str_mem and compare it against str_mem
+	                      ;  // (remember that first 64 bytes of str_mem are used for user
+	                      ;  // input)
+	                      ;  // if strings are the same, that is, the word the user entered is
+	                      ;  // the same as the name of the word we are pointing with entry_addr
+	                      ;  // then strcmp will return 0 and we will exit the loop
+	                      ;  // if it's not equal we will move to the previous entry which
+	                      ;  // is stored at entry_addr + 0
+	                      ;  //
+	                      ;  // the interesting part happens when we are at the first entry and
+	                      ;  // it doesn't match, the address of the previous entry for the
+	                      ;  // first entry is set to 1 (the initial value of last_dict_entry at
+	                      ;  // the top of the file), which is the fake address of the
+	                      ;  // pushint word, when we try to get the string address of the
+	                      ;  // pushint word (m[entry_addr + 1], which is m[2]) the value of
+	                      ;  // m[2] is always 0, which makes str_mem[0] and of course
+	                      ;  // strcmp(str_mem, &str_mem[0]) == 0 because a string is equal to
+	                      ;  // itself and we exit the loop, now entry_addr is 1 and we can
+	                      ;  // use that to check if we found the word or not.
+	                      ;  while (strcmp(str_mem, &str_mem[m[entry_addr + 1]])) {
+	                      ;  entry_addr = m[entry_addr];
+	                      ;  }
+scomp:
+scl:
+	ld hl,str_mem         ;
+	ex de,hl              ;  de = str_mem
+	ld bc,(entry_addr)
+	inc bc                ;  entry_addr + 1
+	ld hl,mhere
+	add hl,bc
+	add hl,bc             ;  !!!!!!!!!!!!!!!!
+	ld c,(hl)
+	inc hl
+	ld b,(hl)             ;  bc = m[entry_addr + 1]]
+	ld hl,str_mem
+	add hl,bc
+	ex de,hl
+	call CmpStrings       ;  is it this word ?
+	jp z,saequ            ;  jp if yes !!
+	ld bc,(entry_addr)
+	ld hl,mhere
+	add hl,bc             ;  hl = *m[entry_addr];
+	add hl,bc             ;  hl = *m[entry_addr];
+	ld c,(hl)
+	inc hl
+	ld b,(hl)             ;  bc= m[entry_addr]
+	ld (entry_addr),bc
+	jp scomp              ;  look at next dict entry
+saequ:
+
+	                      ;  // if entry_addr != 1 then the word the user entered exists, so
+	                      ;  // we run it
+	                      ;  if (entry_addr != 1) {
+	                      ;  // we calculate the address of the data for the entry
+	                      ;  entry_data_addr = entry_addr + 2;
+	                      ;  // and run it
+	                      ;  r(entry_data_addr);
+	ld hl,entry_addr
+	ld a,(HL)
+	inc hl
+	or (HL)
+	cp 1
+	jp z,nfound
+	ld bc,(entry_addr)    ;  entry_addr != 1 so word found
+	inc bc
+	inc bc
+	ld (entry_data_addr),bc
+
+	call run              ;  jp run ????????
+
+	ret
+
+nfound:
+
+	                      ;  } else {
+	                      ;  // if we didn't find the entry we assume it's a number we
+	                      ;  // append the addr of pushint instruction and then the number
+	                      ;  append_to_dict(ADDR_OF_PUSHINT);
+	                      ;  val = atoi(str_mem);
+	                      ;  append_to_dict(val);
+	                      ;  }
+	ld BC,ADDR_OF_PUSHINT
+	call app_to_dict
+	ld hl,str_mem
+	call atoi             ;  retour dans DE:HL
+	ex de,hl
+	ld (val),de           ;  lower 16 bits only !!
+	push de
+	pop bc                ;  bc = value (int)
+	call app_to_dict
+	ret
+
+caseCW_FETCH:	              ;  // @
+	ld bc,(top_of_stack)   ;  top_of_stack = m[top_of_stack];
+	ld hl,mhere
+	add hl,bc
+	add hl,bc
+	ld c,(hl)
+	inc hl
+	ld b,(hl)
+	ld (top_of_stack),bc
+	ret
+
+caseCW_STORE:	              ;  // !
+	ld bc,(top_of_stack)   ;  m[top_of_stack] = stack[stack_ptr];
+	ld hl,mhere
+	add hl,bc
+	add hl,bc
+	call getstack
+	ld (hl),c
+	inc hl
+	ld (hl),b
+	call decstptr         ;  stack_ptr -= 1;
+	call getstack
+	ld (top_of_stack),bc   ;  = stack[stack_ptr];
+	call decstptr         ;  stack_ptr -= 1;
+	ret
+
+caseCW_SUB:	              ;  // -
+	ld de,(top_of_stack)
+	call getstack         ;  bc = stack[stack_ptr]
+	push bc
+	pop hl                ;  hl = stack[stack_ptr]
+	sbc hl,de             ;  hl = stack[stack_ptr] - top_of_stack
+	ex de,hl              ;  de = stack[stack_ptr] - top_of_stack
+	ld (top_of_stack),de
+	call decstptr         ;  stack_ptr -= 1;
+	ret
+
+Mul16:	                      ;  This routine performs the operation DEHL=BC*DE
+	ld hl,0
+	ld a,16
+Mul16Loop:
+	add hl,hl
+	rl e
+	rl d
+	jp nc,NoMul16
+	add hl,bc
+	jp nc,NoMul16
+	inc de                ;  This instruction (with the jump) is like an "ADC DE,0"
+NoMul16:
+	dec a
+	jp nz,Mul16Loop
+	ret
+
+caseCW_MUL:	              ;  // *
+	ld de,(top_of_stack)
+	call getstack
+	call Mul16            ;  DEHL=BC*DE
+	ex de,hl
+	ld (top_of_stack),de
+	call decstptr
+	ret                   ;  break;
+
+BC_Div_DE:
+	                      ;  BC/DE ==> BC, remainder in HL
+	                      ;  NOTE: BC/0 returns 0 as the quotient.
+	                      ;  min: 1072cc
+	                      ;  max: 1232cc
+	                      ;  avg: 1152cc
+	                      ;  28 bytes
+	xor a
+	ld h,a
+	ld l,a
+	sub e
+	ld e,a
+	sbc a,a
+	sub d
+	ld d,a
+
+	ld a,b
+	ld b,16
+
+div_loop:
+	                      ;  shift the bits from BC into HL
+	rl c
+	rla
+	adc hl,hl
+	add hl,de
+	jr c,div_loop_done
+	sbc hl,de
+
+div_loop_done:
+	djnz div_loop
+	rl c
+	rla
+	ld b,a
+	ret
+
+	                      ;  The following routine divides ac by de and places the quotient in ac and the remainder in hl
+div_ac_de:
+	ld hl,0
+	ld b,16
+_loop:
+	db 31h                ;  sll c
+	rla
+	adc hl,hl
+	sbc hl,de
+	jr nc,$+4
+	add hl,de
+	dec c
+	djnz _loop
+	ret
+
+caseCW_DIV:	              ;  // /
+	ld de,(top_of_stack)
+	call getstack         ;  bc = stack[stack_ptr]
+	                      ;  ld a,b ; ac = stack[stack_ptr]
+	                      ;  call div_ac_de ; ac = ac / de
+	call BC_Div_DE        ;  BC/DE ==> BC, remainder in HL
+	ld (top_of_stack),bc
+	call decstptr
+	ret
+
+caseCW_LT0:	              ;  // <0
+	ld de,(top_of_stack)
+	ld a,e
+;	cp 41
+;	jr nz,cas01
+;	nop
+cas01:
+	ld hl,0               ;  to compare with
+	ld bc,0               ;  return flag init to 0
+	or a
+	sbc hl,de
+	add hl,de
+	jp p,laa
+	inc bc
+laa:
+	ld (top_of_stack),bc
+	ret
+
+caseCW_EXIT:	              ;  // exit
+	ld bc,(mhere+2)
+	ld hl,mhere
+	add hl,bc
+	add hl,bc             ;  hl=*m[m[1]]
+	ld c,(hl)
+	inc hl
+	ld b,(hl)             ;  bc=m[m[1]]
+	ld (program_counter),bc
+	ld bc,(mhere+2)
+	dec bc
+	ld (mhere+2),bc
+	ret
+
+caseCW_ECHO:	              ;  // echo
+	ld bc,(top_of_stack)
+	ld a,c
+	call CONOUT
+	ld bc,(stack_ptr)
+	call getstack
+	                      ;  ld hl,stack
+	                      ;  add hl,bc
+	                      ;  add hl,bc
+	                      ;  ld c,(hl)
+	                      ;  inc hl
+	                      ;  ld b,(hl) ; bc=stack[stack_ptr]
+	ld (top_of_stack),bc
+	call decstptr
+	ret
+
+caseCW_KEY:	              ;  // key
+	call incstptr
+	ld de,(top_of_stack)
+	ld bc,(stack_ptr)
+	ld hl,stack
+	add hl,bc
+	add hl,bc             ;  hl=*stack[stack_ptr]
+	ld (hl),e
+	inc hl
+	ld (hl),d             ;  stack[stack_ptr] = top_of_stack
+	call inchar
+	call locEcho
+	ld b,0
+	ld c,a
+	ld (top_of_stack),bc
+	ret
+
+caseCW_PICK:	              ;  // _pick
+	ld hl,(stack_ptr)
+	ld bc,(top_of_stack)
+	sbc hl,bc             ;  hl=stack_ptr - top_of_stack
+	ex de,hl              ;  de = stack_ptr - top_of_stack
+	push de
+	pop bc
+	ld hl,stack
+	add hl,bc
+	add hl,bc
+	ld e,(hl)
+	inc hl
+	ld d,(hl)             ;  de = stack[stack_ptr - top_of_stack]
+	ld (top_of_stack),de
+	ret
+
+caseCW_BYE:
+	ld hl,isbye
+	inc (hl)
+	ret
+
+caseCW_IEQU:
+
+	ret
+
+	                      ;  }
+	                      ;  }
+
+main:	                      ;  int main()
+	                      ;  {
+
+	ld HL,thirdstr        ;  finp=fopen("third","r");
+	ld (finp),hl
+	ld bc,0
+	ld (isecho),bc
+	ld (filptr),bc
+	inc bc
+	ld (isfile),bc
+
+
+	                      ;  // 0, 1 and 2 are internal words with no names
+	                      ;  // 0: pushint
+	                      ;  // 1: compile
+	                      ;  // 2: run
+
+	                      ;  // : (codeword 3)
+
+	ld bc,CW_DEFINE       ;  def_word(CW_DEFINE);
+	call def_word
+
+	                      ;  // immediate (codeword 4)
+
+	ld bc,CW_IMMED
+	call def_word
+
+	                      ;  // compile (codeword 1)
+
+	ld bc,CW_COMPILE      ;  def_word(CW_COMPILE);
+	call def_word
+
+	                      ;  // define the read loop, by defining the word _read as
+	                      ;  // 40: CW_COMPILE
+	                      ;  // 41: CW__READ
+	                      ;  // 42: CW_RUN
+	                      ;  // 43: 41
+	                      ;  // 44: 42
+	                      ;  //
+	                      ;  // from the design file: FIRST builds a very small word internally that it
+	                      ;  // executes as its main loop. This word calls _read and then calls itself.
+	                      ;  // Each time it calls itself, it uses up a word on the return stack, so it
+	                      ;  // will eventually trash things.
+
+	ld bc,(mhere)         ;  tmp1 = m[0];
+	ld (tmp1),bc
+
+	ld BC,CW_READ
+	call app_to_dict      ;  append_to_dict(CW__READ);
+	ld BC,CW_RUN
+	call app_to_dict      ;  append_to_dict(CW_RUN);
+
+	ld bc,(mhere)         ;  program_counter = m[0];
+	ld (program_counter),bc
+
+	                      ;  // appends 41
+	ld BC,(tmp1)
+	call app_to_dict      ;  append_to_dict(tmp1);
+
+	                      ;  // appends 42
+	ld BC,(program_counter)
+	dec BC
+	call app_to_dict      ;  append_to_dict(program_counter - 1);
+
+	                      ;  // define the rest of builtin words
+	                      ;  // they will have two instructions
+	                      ;  // CW_COMPILE and the builtin codeword for them, a number from 6 to 15
+	                      ;  // 6: @ 7: ! 8: - 9: * 10: / 11: <0 12: exit 13: echo 14: key 15: _pick
+	                      ;  // for (i = 6; i < 16; i += 1) {
+	                      ;  def_word(CW_COMPILE); append_to_dict(6); def_word(CW_COMPILE,mode ? "! " : 0); append_to_dict(7); def_word(CW_COMPILE,mode ? "- " : 0); append_to_dict(8);
+	                      ;  def_word(CW_COMPILE,mode ? "* " : 0); append_to_dict(9); def_word(CW_COMPILE,mode ? "/ " : 0); append_to_dict(10); def_word(CW_COMPILE,mode ? "<0 " : 0); append_to_dict(11);
+	                      ;  def_word(CW_COMPILE,mode ? "exit " : 0); append_to_dict(12); def_word(CW_COMPILE,mode ? "echo " : 0); append_to_dict(13); def_word(CW_COMPILE,mode ? "key " : 0); append_to_dict(14);
+	                      ;  def_word(CW_COMPILE,mode ? "_pick " : 0); append_to_dict(15); def_word(CW_COMPILE,mode ? "bye " : 0); append_to_dict(16);
+	                      ;  // }
+	ld e,6                ;  i=6 m[xx]= last_cfa m[xx+1]=nfa m[xx+2]=cw
+dloop:
+	push de
+	ld bc,CW_COMPILE      ;  ; 26,52, 1 / 2D,54,1 / 31,56,1 / 35,58,1 / 39,54,1 .......
+	call def_word         ;  def_word(CW_COMPILE)
+	pop de
+	ld b,0
+	ld C,e                ;  bc= i
+	push de
+	call app_to_dict      ;  append_to_dict(i) ; 6 / 7 / 8 / 9 / 10 / 11 / 12 / 13 / 14 / 15 / 16
+	pop de
+	inc e
+	ld a,18               ;  limit index
+	cp e
+	jp nz,dloop
+
+	ld bc,(mhere)         ;  // top of return stack (grows upwards) STACK ??
+	ld (mhere+2),bc       ;  m[1] = m[0];
+
+	                      ;  // reserve 512 ints for stack, skip stack space in dict pointer
+	                      ;  m[0] += 512;
+	ld hl,(mhere)
+	ld bc,512             ;  it is a ptr !!!
+	add hl,bc
+	ld (mhere),hl
+
+	                      ;  // at the beginning of the loop program_counter points to 43
+	                      ;  // which will call read and then call itself for the loop
+
+	ld hl,isbye
+	ld a,0
+	ld (hl),a
+
+forever:
+	ld bc,(program_counter)
+	ld HL,mhere
+	add hl,bc
+	add hl,bc             ;  hl = *m[program_counter]
+	ld c,(HL)
+	inc hl
+	ld b,(HL)             ;  bc = m[program_counter]
+	ld (word_to_execute),bc
+	ld de,(program_counter)
+	inc de
+	ld (program_counter),de
+	                      ;  program_counter+=1]
+
+	call run              ;  bc = word_to_execute
+	ld hl,isbye
+
+	ld a,1
+	cp (hl)
+	jp nz,forever
+
+	HALT                  ;  ret
+
+	                      ;  while(1) {
+	                      ;  word_to_execute = m[program_counter];
+	                      ;  program_counter += 1;
+	                      ;  r(word_to_execute);
+	                      ;  if (byef) {
+	                      ;  printf("Fyi : dic. space %d voc. space %d",last_dict_entry,last_str_entry);
+	                      ;  getchar();
+	                      ;  exit(0);
+	                      ;  }
+	                      ;  }
+	                      ;
+	                      ;  return 0;
+	                      ;  }
+	org (($ / 16 ) + 1 ) * 16
+
+mkr:	dw 55aah              ;  marqueur fin de code pour test jp (hl)
+
+finp:	                dw 0                  ;  FILE *finp;
+filinp:	                dw 1                  ;  int
+filptr:	                dw 0
+byef:	                dw 0                  ;  int
+last_dict_entry:	dw 1
+program_counter:	dw 0
+stack_ptr:              dw 0
+tmp1:	                dw 0
+word_to_execute:	dw 0
+mode:	                dw 0
+isbye:	                dw 0
+read_count:            	dw 0
+val:	                dw 0
+entry_addr:         	dw 0
+entry_data_addr:	dw 0
+next_word:      	dw 0
+codeword:	        dw 0
+isfile:	                dw 0
+last_str_entry:  	dw 64
+top_of_stack:	        dw 0
+isecho:                 dw 1
+tokch:                  dw 0
+
+	                      ;  // strings start at index 64 since first 64 bytes are used to read user
+	                      ;  // input
+
+	org (($ / 16 ) + 1 ) * 16
+
+	                      ;  // m[0] = 32 so that the first dictionary append is at index 32
+
+mhere:
+mem:
+	db 32,0
+	org $ + 4 * 1024 * 2
+
+	                      ;  // when defining the first word (CW_DEFINE), address of prev word will be
+	                      ;  // 1 which is used to know if we are at the first (last) dictionary
+	                      ;  // definition when doing lookup on _read
+
+stack:
+	org (($ / 16 ) + 1 ) * 16
+	org $+512
+
+str_mem:
+	org (($ / 16 ) + 1 ) * 16
+	org $ + 4096
+thirdstr:
+	db ': immediate _read @ ! - * / <0 exit echo key _pick bye iequ ',0dh
+	db ': debug immediate 1 5 ! exit ',0dh
+	                      ;  db ' debug ',0dh
+	db ': r 1 exit ',0dh
+	db ': ] r @ 1 - r ! _read ] ',0dh
+	db ': _main immediate r @ 7 ! ] ',0dh
+	db '_main ',0dh
+	                      ;  db ' : aa immediate 3 @ 4 ! 4 3 - 2 * 2 / <0 39 echo key ) bye exit ',0dh
+	                      ;  db ' aa ',0dh
+	db ': _x 3 @ exit ',0dh
+	db ': _y 4 @ exit ',0dh
+	db ': _x! 3 ! exit ',0dh
+	db ': _y! 4 ! exit ',0dh
+	db ': swap _x! _y! _x _y exit ',0dh
+	db ': + 0 swap - - exit ',0dh
+	db ': dup _x! _x _x exit ',0dh
+	db ': inc dup @ 1 + swap ! exit ',0dh
+	db ': h 0 exit ',0dh
+	db ': , h @ ! h inc exit ',0dh
+	db ': ',27h,' r @ @ dup 1 + r @ ! @ exit ',0dh
+	db ': ; immediate ',27h,' exit , exit ',0dh
+	db ': drop 0 * + ; ',0dh
+	db ': dec dup @ 1 - swap ! ; ',0dh
+	db ': tor r @ @ swap r @ ! r @ 1 + r ! r @ ! ; ',0dh
+	db ': fromr r @ @ r @ 1 - r ! r @ @ swap r @ ! ; ',0dh
+	db ': tail fromr fromr drop tor ; ',0dh
+	db ': minus 0 swap - ; ',0dh
+	db ': bnot 1 swap - ; ',0dh
+	db ': < - <0 ; ',0dh
+	db ': logical dup 0 < swap minus 0 < + ; ',0dh
+	db ': not logical bnot ; ',0dh
+	db ': = - not ; ',0dh
+	db ': branch r @ @ @ r @ @ + r @ ! ; ',0dh
+	db ': computebranch 1 - * 1 + ; ',0dh
+	db ': notbranch not r @ @ @ computebranch r @ @ + r @ ! ; ',0dh
+	db ': here h @ ; ',0dh
+	db ': if immediate ',27h,' notbranch , here 0 , ; ',0dh
+	db ': then immediate dup here swap - swap ! ; ',0dh
+	db ': ',27h,29h,27h,' 41 ; ',0dh
+;	db ': find-) key 41 = not if tail find-) then ; ',0dh
+	db ': find-) key 41 = if exit then find-) ; ',0dh
+	db ': ( immediate find-) ; ',0dh
+	db ' ( Commentaire !!!!!!!!!!! ) ',0dh
+	db ': else immediate ',27h,' branch , here 0 , swap dup here swap - swap ! ; ', 0dh
+	db ': over _x! _y! _y _x _y ; ',0dh
+	db ': add _x! _x @ + _x ! ; ',0dh
+	db ': allot h add ; ',0dh
+	db ': maybebranch logical r @ @ @ computebranch r @ @ + r @ ! ; ',0dh
+	db ': mod _x! _y! _y _y _x / _x * - ; ',0dh
+	db ': ',27h,5ch,6eh,27h,' 13 ; ',0dh
+	db ': ',27h,22h,27h,' 34 ; ',0dh
+	db ': ',27h,30h,27h,' 48 ; ',0dh
+	db ": 'space' 32 ; ",0dh
+	db ': cr ',27h,5ch,6eh,27h,' echo 10 echo exit ',0dh
+	db ": printnum dup 10 mod '0' + swap 10 / dup if printnum 0 then drop echo ; ",0dh
+	db ": . dup 0 < if 45 echo minus then printnum 'space' echo ; ",0dh
+	db ': debugprint dup . cr ; ',0dh
+	db ': _print dup 1 + swap @ dup ',27h,22h,27h,' = if drop exit then echo tail _print ; ',0dh
+	db ': print _print ; ',0dh
+	db ': immprint r @ @ print r @ ! ; ',0dh
+	db ': find-" key dup , ',27h,22h,27h,' = if exit then tail find-" ; ',0dh
+	db ': " immediate ',27h,' immprint , find-" ; ',0dh
+;	db ': " immediate key drop ',27h,' immprint , find-" ; ',0dh
+	                      ;  db ' key ',22h,' ',0dh
+	                      ;  db ' ',22h,' A',22h,' . ',0dh
+	db ': do immediate ',27h,' swap , ',27h,' tor , ',27h,' tor , here ; ',0dh
+	db ': i r @ 1 - @ ; ',0dh
+	db ': j r @ 3 - @ ; ',0dh
+	db ': > swap < ; ',0dh
+	db ': <= 1 + < ; ',0dh
+	db ': >= swap <= ; ',0dh
+	db ': inci r @ 1 - inc r @ 1 - @ r @ 2 - @ < if r @ @ @ r @ @ + r @ ! exit then fromr 1 + fromr drop fromr drop tor ; ',0dh
+	db ': loop immediate ',27h,' inci , here - , ; ',0dh
+	db ': loopexit fromr drop fromr drop fromr drop ; ',0dh
+	db ': isprime dup 2 = if exit then dup 2 / 2 do dup i mod not if drop 0 loopexit then loop ; ',0dh
+	db ': execute 8 ! ',27h,' exit 9 ! 8 tor ; ',0dh
+	db ': :: ; ',0dh
+	db ': fix-:: immediate 3 ',27h,' :: ! ; ',0dh
+	db 'fix-:: ',0dh
+	db ': : immediate :: ] ; ',0dh
+	db ": command here 5 ! _read here 5 @ = if tail command then here 1 - h ! "
+        db "here 5 @ = if here @ execute else here @ here 1 - h ! then tail command ; ",0dh
+	db ': make-immediate here 1 - dup dup h ! @ swap 1 - ! ; ',0dh
+	db ': <build immediate make-immediate ',27h,' :: , 2 , here 0 , ',27h,' , , ; ',0dh
+	db ': does> immediate ',27h,' command , here swap ! 2 , ',27h,' fromr , ; ',0dh
+	                      ;  db ': _dump dup " (" . " , " dup @ dup ',27h,' exit = if " ;)" cr exit then . " ), " 1 + tail _dump ; ',0dh
+	                      ;  db ': dump _dump ; ',0dh
+	db ': # . cr ; ',0dh
+	db ': var <build , does> ; ',0dh
+	db ': constant <build , does> @ ; ',0dh
+	db ': array <build allot does> + ; ',0dh
+	db ': [ immediate command ; ',0dh
+	db ': _welcome " Welcome to THIRD." cr " Ok." cr ; ',0dh
+	db ': ; immediate ',27h,' exit , command exit ',0dh
+	db ' [ ',0dh
+	db ' _welcome command ',0dh
+	db 0ffh               ;  EOF !!!!
+
+dsize:
+	dw $ - thirdstr
+
+   END main
+
